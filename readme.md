@@ -7,4 +7,4 @@ Another attempt on POGO application in GOLANG
 - [ ] still many more...
 
 ### Credit:
-- Thanks to (POGO API Golang)[https://github.com/pkmngo-odi/pogo] for codebase and inspiration
+- Thanks to [POGO API Golang](https://github.com/pkmngo-odi/pogo)for codebase and inspiration
