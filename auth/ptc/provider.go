@@ -93,11 +93,13 @@ func (p *Provider) Login() (string, error) {
 	}
 
 	go p.processTicket(ch, processLoginResp)
+	close(ch)
 
-	return "not yet", nil
+	return p.ticket, nil
 }
 
 func (p *Provider) checkLoginProcess(ch chan<- *HTTPResponses) {
+
 	req, _ := http.NewRequest("GET", loginURL, nil)
 	req.Header.Set("User-Agent", "niantic")
 
