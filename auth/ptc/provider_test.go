@@ -1,11 +1,13 @@
 package ptc
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path"
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -15,9 +17,27 @@ func TestProvider(t *testing.T) {
 
 	Convey("Setup PTC Provider", t, func() {
 
+		loginReqTest := &LoginRequest{Lt: "lt1234", Execution: "execme"}
+
 		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			rw.WriteHeader(200)
-			rw.Write([]byte("pokemon"))
+			rw.Header().Set("Content-Type", "application/json")
+
+			switch req.URL.Path {
+			case "/sso/login":
+
+				if req.Method == http.MethodPost {
+					http.Redirect(rw, req, "https://google.com?ticket=abc12", http.StatusMovedPermanently)
+					return
+				}
+
+				rw.WriteHeader(http.StatusOK)
+				json.NewEncoder(rw).Encode(loginReqTest)
+
+			case "/sso/oauth2.0/accessToken":
+				rw.WriteHeader(http.StatusMovedPermanently)
+				rw.Write([]byte("access_token=abc123"))
+			}
+
 		}))
 
 		u, err := url.Parse(server.URL)
@@ -31,16 +51,38 @@ func TestProvider(t *testing.T) {
 		So(pvd, ShouldNotBeNil)
 		So(pvd.GetProviderString(), ShouldEqual, "ptc")
 
-		Convey("Check login process", func() {
-			ch := make(chan *HTTPResponses, 1)
-			pvd.checkLoginProcess(ch)
-			resp := <-ch
-			close(ch)
+		Convey("Test Check login process", func() {
+			resp, err := pvd.checkLoginProcess()
 
-			// log.Printf("RawBody looks like: %v \n", string(resp.rawBody))
-			So(resp.err, ShouldBeNil)
+			So(err, ShouldBeNil)
 			So(resp.response.StatusCode, ShouldEqual, http.StatusOK)
-			So(string(resp.rawBody), ShouldEqual, "pokemon")
+
+			loginReqMarshal, _ := json.Marshal(loginReqTest)
+			So(strings.TrimSpace(string(resp.rawBody)), ShouldEqual, string(loginReqMarshal))
+		})
+
+		Convey("Test process login", func() {
+			loginReqMarshal, _ := json.Marshal(loginReqTest)
+			respData := &HTTPResponses{
+				rawBody: []byte(string(loginReqMarshal)),
+			}
+
+			resp, err := pvd.processLogin(respData)
+
+			So(err, ShouldBeNil)
+			So(resp.response.StatusCode, ShouldEqual, http.StatusMovedPermanently)
+		})
+
+		Convey("Test process ticket and access token", func() {
+			pvd.processTicket("abc12")
+			So(pvd.GetAccessToken(), ShouldEqual, "abc123")
+		})
+
+		Convey("Test full Login", func() {
+			accCode, err := pvd.Login()
+
+			So(err, ShouldBeNil)
+			So(accCode, ShouldEqual, "abc123")
 		})
 
 	})

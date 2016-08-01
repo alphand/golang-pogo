@@ -42,7 +42,6 @@ type HTTPResponses struct {
 	url      string
 	response *http.Response
 	rawBody  []byte
-	err      error
 }
 
 // NewProvider - Create Pokemon Trainer Club auth provider instance
@@ -76,51 +75,46 @@ func (p *Provider) GetAccessToken() string {
 
 // Login - PTC login method
 func (p *Provider) Login() (string, error) {
-	ch := make(chan *HTTPResponses, 1)
+	checkLoginResp, chekLoginErr := p.checkLoginProcess()
 
-	go p.checkLoginProcess(ch)
-	checkLoginResp := <-ch
-
-	if checkLoginResp.err != nil {
+	if chekLoginErr != nil {
 		return loginError("Could not start the login process, website might be down")
 	}
 
-	go p.processLogin(ch, checkLoginResp)
-	processLoginResp := <-ch
+	processLoginResp, procLoginErr := p.processLogin(checkLoginResp)
 
-	if processLoginResp.err != nil {
-		return loginError(processLoginResp.err.Error())
+	if procLoginErr != nil {
+		return loginError(procLoginErr.Error())
 	}
 
-	go p.processTicket(ch, processLoginResp)
-	close(ch)
+	location, _ := url.Parse(processLoginResp.response.Header.Get("Location"))
+	ticket := location.Query().Get("ticket")
+	p.processTicket(ticket)
 
 	return p.ticket, nil
 }
 
-func (p *Provider) checkLoginProcess(ch chan<- *HTTPResponses) {
+func (p *Provider) checkLoginProcess() (*HTTPResponses, error) {
 
 	req, _ := http.NewRequest("GET", loginURL, nil)
 	req.Header.Set("User-Agent", "niantic")
 
 	resp, err := p.http.Do(req)
 	if err != nil {
-		ch <- &HTTPResponses{loginURL, nil, nil, err}
-		return
+		return nil, err
 	}
 
 	defer resp.Body.Close()
 	body, err2 := ioutil.ReadAll(resp.Body)
 
 	if err2 != nil {
-		ch <- &HTTPResponses{loginURL, nil, nil, err2}
-		return
+		return nil, err2
 	}
 
-	ch <- &HTTPResponses{loginURL, resp, body, nil}
+	return &HTTPResponses{loginURL, resp, body}, nil
 }
 
-func (p *Provider) processLogin(ch chan<- *HTTPResponses, resp *HTTPResponses) {
+func (p *Provider) processLogin(resp *HTTPResponses) (*HTTPResponses, error) {
 	var loginRespBody LoginRequest
 	json.Unmarshal(resp.rawBody, &loginRespBody)
 
@@ -138,7 +132,7 @@ func (p *Provider) processLogin(ch chan<- *HTTPResponses, resp *HTTPResponses) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	respLogin, err := p.http.Do(req)
-	if _, ok := err.(*url.Error); !ok {
+	if _, ok := err.(*url.Error); ok {
 		defer respLogin.Body.Close()
 		rawBody, _ := ioutil.ReadAll(respLogin.Body)
 		var respBody LoginRequest
@@ -152,17 +146,13 @@ func (p *Provider) processLogin(ch chan<- *HTTPResponses, resp *HTTPResponses) {
 			_, errorVar = loginError("Could not request authorization")
 		}
 
-		ch <- &HTTPResponses{loginURL, respLogin, rawBody, errorVar}
-		return
+		return nil, errorVar
 	}
 
-	ch <- &HTTPResponses{loginURL, respLogin, nil, nil}
-	return
+	return &HTTPResponses{loginURL, respLogin, nil}, nil
 }
 
-func (p *Provider) processTicket(ch chan<- *HTTPResponses, resp *HTTPResponses) {
-	location, _ := url.Parse(resp.response.Header.Get("Location"))
-	ticket := location.Query().Get("ticket")
+func (p *Provider) processTicket(ticket string) error {
 
 	authForm := url.Values{}
 	authForm.Set("client_id", clientID)
@@ -179,12 +169,13 @@ func (p *Provider) processTicket(ch chan<- *HTTPResponses, resp *HTTPResponses) 
 
 	respAuth, err := p.http.Do(req)
 	if err != nil {
-		ch <- &HTTPResponses{authorizeURL, nil, nil, err}
-		return
+		return err
 	}
 
 	defer respAuth.Body.Close()
 	b, _ := ioutil.ReadAll(respAuth.Body)
 	query, _ := url.ParseQuery(string(b))
 	p.ticket = query.Get("access_token")
+
+	return nil
 }
